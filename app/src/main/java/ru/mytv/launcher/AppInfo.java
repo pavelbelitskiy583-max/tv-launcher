@@ -9,9 +9,10 @@ final class AppInfo {
     final String label;
     final String pkg;
     final ComponentName component;
-    final boolean isTvApp;      // приложение заявлено для ТВ (leanback)
-    Drawable banner;            // широкая ТВ-картинка 16:9, если есть
+    final boolean isTvApp;
+    Drawable banner;   // широкая ТВ-картинка, если есть
     Drawable icon;
+    int color = 0xFF2C2C2E; // фирменный цвет, вычисленный из иконки
 
     AppInfo(String label, String pkg, ComponentName component, boolean isTvApp) {
         this.label = label;
