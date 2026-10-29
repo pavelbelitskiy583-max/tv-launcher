@@ -14,7 +14,7 @@ New-Item -ItemType Directory -Force -Path $DL | Out-Null
 function Step($t) { Write-Host ''; Write-Host "== $t ==" -ForegroundColor Cyan }
 function Ok($t)   { Write-Host "  OK  $t" -ForegroundColor Green }
 function Warn($t) { Write-Host "  !!  $t" -ForegroundColor Yellow }
-function A { & $ADB -s $DEV @args 2>&1 }
+function A { & $ADB -s $DEV @args 2>&1 | ForEach-Object { "$_" } }
 function Get-File($url, $out) {
     try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out; return $true }
     catch { Warn "Не скачалось: $url"; return $false }
@@ -22,7 +22,19 @@ function Get-File($url, $out) {
 function Install-Apk($path, $name) {
     Write-Host "  ...  ставлю $name"
     $r = A install -r $path | Out-String
-    if ($r -match 'Success') { Ok $name } else { Warn "$name : $($r.Trim())" }
+    if ($r -match 'UPDATE_INCOMPATIBLE|signatures do not match') {
+        $pkg = [regex]::Match($r, 'Package (\S+) signatures').Groups[1].Value
+        if ($pkg) {
+            Write-Host "       старая версия подписана другим ключом — переустанавливаю $pkg"
+            A uninstall $pkg | Out-Null
+            $r = A install $path | Out-String
+        }
+    }
+    if ($r -match 'Success') { Ok $name; return }
+    if ($r -match 'NO_MATCHING_ABIS') { Warn "$name : этот APK для другого процессора. Нужна версия armeabi-v7a (32-бит)."; return }
+    if ($r -match 'OLDER_SDK') { Warn "$name : требует Android новее, чем $ver. Нужна более старая версия APK."; return }
+    $line = ($r -split "`n" | Where-Object { $_ -match 'Failure|Error' } | Select-Object -First 1)
+    Warn "$name : $line"
 }
 
 # ---------- 1. ADB ----------

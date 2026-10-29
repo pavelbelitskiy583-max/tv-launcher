@@ -14,11 +14,20 @@ android {
         versionName '1.0'
     }
 
+    // Постоянный ключ подписи: обновления ставятся поверх без удаления
+    signingConfigs {
+        mytv {
+            storeFile file('mytv.keystore')
+            storePassword 'mytv1234'
+            keyAlias 'mytv'
+            keyPassword 'mytv1234'
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
-            // Подписываем отладочным ключом, чтобы APK сразу ставился на ТВ
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.mytv
         }
     }
 
