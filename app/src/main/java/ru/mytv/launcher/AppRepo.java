@@ -126,6 +126,19 @@ final class AppRepo {
         return false;
     }
 
+    /** Приложение тюнера/HDMI-входов (на Starwind называется iTV). */
+    static AppInfo findTvApp(Map<String, AppInfo> apps) {
+        AppInfo best = null;
+        for (AppInfo a : apps.values()) {
+            String l = a.label.toLowerCase(Locale.ROOT);
+            String p = a.pkg.toLowerCase(Locale.ROOT);
+            if (l.equals("itv")) return a;
+            if (best == null && (p.contains("tvplayer") || p.contains("livetv") || p.contains("inputsource")
+                    || p.contains("tvcenter") || p.endsWith(".tv") && p.contains("mstar"))) best = a;
+        }
+        return best;
+    }
+
     static boolean isJunk(AppInfo a) {
         String l = a.label.toLowerCase(Locale.ROOT);
         for (String j : JUNK) if (l.contains(j)) return true;

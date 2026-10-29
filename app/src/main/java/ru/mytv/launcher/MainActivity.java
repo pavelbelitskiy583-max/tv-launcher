@@ -106,8 +106,33 @@ public class MainActivity extends Activity {
         if (vpnCard != null) vpnCard.requestFocus();
     }
 
+    /** Кнопки Source / TV / HDMI на пульте → приложение ТВ-входов (iTV). */
+    private static boolean isSourceKey(int k) {
+        return k == KeyEvent.KEYCODE_TV_INPUT || k == KeyEvent.KEYCODE_TV
+                || (k >= KeyEvent.KEYCODE_TV_INPUT_HDMI_1 && k <= KeyEvent.KEYCODE_TV_INPUT_VGA_1)
+                || k == KeyEvent.KEYCODE_TV_ANTENNA_CABLE;
+    }
+
+    private void openSource(int keyCode) {
+        Map<String, AppInfo> apps = AppRepo.cache;
+        AppInfo tv = apps == null ? null : AppRepo.findTvApp(apps);
+        if (tv != null) {
+            Intent i = tv.launchIntent();
+            i.putExtra("android.intent.extra.KEY_EVENT", new KeyEvent(KeyEvent.ACTION_DOWN, keyCode));
+            try { startActivity(i); return; } catch (Exception ignored) { }
+            Ui.launch(this, tv);
+            return;
+        }
+        try {
+            startActivity(new Intent("android.settings.TV_INPUT_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception e) {
+            Ui.toast(this, "Не найдено приложение ТВ-входов");
+        }
+    }
+
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent e) {
+        if (isSourceKey(keyCode)) { openSource(keyCode); return true; }
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             View f = getCurrentFocus();
             if (f != null) { showMenuFor(f.getTag()); return true; }
