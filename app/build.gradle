@@ -1,0 +1,34 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'ru.mytv.launcher'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'ru.mytv.launcher'
+        minSdk 21
+        targetSdk 28   // старые ТВ-прошивки: без лишних ограничений новых Android
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // Подписываем отладочным ключом, чтобы APK сразу ставился на ТВ
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
