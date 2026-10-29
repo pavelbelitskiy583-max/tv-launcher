@@ -11,13 +11,13 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
-import android.os.Build;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.animation.DecelerateInterpolator;
+import android.view.animation.PathInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -26,14 +26,10 @@ import android.widget.Toast;
 
 import java.util.List;
 
-/** Общие элементы интерфейса в стиле tvOS. */
+/** Плитки и мелочи в духе tvOS. */
 final class Ui {
-    static final int BG_TOP = 0xFF16161A;
-    static final int BG_BOTTOM = 0xFF000000;
-    static final int GRAPHITE = 0xFF2C2C2E;
     static final int TEXT = 0xFFF5F5F7;
-    static final int TEXT_2 = 0x99EBEBF5;   // вторичный текст Apple
-    static final float FOCUS_SCALE = 1.12f;
+    static final float FOCUS_SCALE = 1.1f;
 
     interface OnFocus { void onFocus(View v, boolean has); }
 
@@ -44,30 +40,35 @@ final class Ui {
                 a.getResources().getDisplayMetrics()));
     }
 
-    static TextView text(Activity a, float sp, int color, int weight) {
+    static TextView text(Activity a, float px, int color, boolean medium) {
         TextView t = new TextView(a);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, px);
         t.setTextColor(color);
         t.setIncludeFontPadding(false);
-        String fam = weight >= 700 ? "sans-serif" : weight >= 500 ? "sans-serif-medium" : "sans-serif-light";
-        t.setTypeface(Typeface.create(fam, weight >= 700 ? Typeface.BOLD : Typeface.NORMAL));
-        if (Build.VERSION.SDK_INT >= 21) t.setLetterSpacing(weight >= 700 ? -0.01f : 0f);
+        t.setTypeface(Typeface.create(medium ? "sans-serif-medium" : "sans-serif", Typeface.NORMAL));
         return t;
     }
 
-    static GradientDrawable rounded(int color, float radius) {
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(color);
+    static GradientDrawable vertical(int top, int bottom, float radius) {
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{top, bottom});
         g.setCornerRadius(radius);
         return g;
     }
 
+    static int shade(int c, float f) {
+        float[] hsv = new float[3];
+        Color.colorToHSV(c, hsv);
+        hsv[2] = Math.max(0f, Math.min(1f, hsv[2] * f));
+        return Color.HSVToColor(hsv);
+    }
+
     /**
-     * Плитка + подпись под ней (видна только в фокусе, как в tvOS).
-     * Возвращает контейнер; фокусируемая плитка — первый ребёнок, у неё tag.
+     * Плитка-иконка. Возвращает контейнер (иконка + подпись под ней);
+     * фокусируемая карточка — первый ребёнок, у неё tag.
      */
-    static LinearLayout tile(final Activity a, Object tag, Drawable banner, Drawable icon, int color,
-                             boolean glyph, String label, int w, int h, final OnFocus extra) {
+    static LinearLayout tile(final Activity a, Object tag, Drawable banner, Drawable icon,
+                             int top, int bottom, float iconScale, String label,
+                             final int w, final int h, final OnFocus extra) {
         LinearLayout box = new LinearLayout(a);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setClipChildren(false);
@@ -77,9 +78,9 @@ final class Ui {
         card.setTag(tag);
         card.setFocusable(true);
         card.setClickable(true);
-        float r = dp(a, 14);
-        card.setBackground(rounded(banner != null ? Color.BLACK : (glyph ? GRAPHITE : color), r));
-        if (Build.VERSION.SDK_INT >= 21) card.setClipToOutline(true);
+        float r = h * 0.09f;
+        card.setBackground(vertical(top, bottom, r));
+        card.setClipToOutline(true);
 
         ImageView img = new ImageView(a);
         if (banner != null) {
@@ -89,37 +90,50 @@ final class Ui {
         } else {
             img.setImageDrawable(icon);
             img.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            int s = (int) (h * (glyph ? 0.36f : 0.52f));
-            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(s, s, Gravity.CENTER);
-            card.addView(img, lp);
-            if (!glyph) {
-                // мягкий блик сверху — «стекло» как у иконок Apple
-                View sheen = new View(a);
-                GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                        new int[]{0x33FFFFFF, 0x00FFFFFF, 0x22000000});
-                sheen.setBackground(g);
-                card.addView(sheen, new FrameLayout.LayoutParams(-1, -1));
-            }
+            int s = (int) (h * iconScale);
+            card.addView(img, new FrameLayout.LayoutParams(s, s, Gravity.CENTER));
         }
+
+        // блик, который пробегает по иконке при наведении
+        final View sheen = new View(a);
+        GradientDrawable sg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{0x00FFFFFF, 0x30FFFFFF, 0x00FFFFFF});
+        sheen.setBackground(sg);
+        sheen.setRotation(18);
+        sheen.setTranslationX(-w);
+        card.addView(sheen, new FrameLayout.LayoutParams((int) (w * 0.5f), (int) (h * 1.6f), Gravity.CENTER_VERTICAL));
+
+        // тонкий верхний свет — как у стеклянных иконок Apple
+        View rim = new View(a);
+        rim.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0x26FFFFFF, 0x00FFFFFF}));
+        card.addView(rim, new FrameLayout.LayoutParams(-1, (int) (h * 0.45f), Gravity.TOP));
+
         box.addView(card, new LinearLayout.LayoutParams(w, h));
 
-        final TextView caption = text(a, 17, TEXT, 500);
+        final TextView caption = text(a, h * 0.13f, TEXT, true);
         caption.setText(label);
         caption.setSingleLine(true);
         caption.setEllipsize(TextUtils.TruncateAt.END);
         caption.setGravity(Gravity.CENTER_HORIZONTAL);
         caption.setAlpha(0f);
+        caption.setShadowLayer(8, 0, 2, 0x99000000);
         LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(w, -2);
-        cl.topMargin = dp(a, 18);
+        cl.topMargin = (int) (h * 0.16f);
         box.addView(caption, cl);
 
+        final PathInterpolator ease = new PathInterpolator(0.2f, 0.9f, 0.25f, 1f);
         card.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override public void onFocusChange(View v, boolean has) {
                 v.animate().scaleX(has ? FOCUS_SCALE : 1f).scaleY(has ? FOCUS_SCALE : 1f)
-                        .translationZ(has ? dp(a, 18) : 0).setDuration(220)
-                        .setInterpolator(new DecelerateInterpolator(2f)).start();
-                caption.animate().alpha(has ? 1f : 0f).translationY(has ? dp(a, 6) : 0)
-                        .setDuration(220).start();
+                        .translationZ(has ? h * 0.18f : 0f).setDuration(260).setInterpolator(ease).start();
+                caption.animate().alpha(has ? 1f : 0f).translationY(has ? h * 0.05f : 0f)
+                        .setDuration(240).start();
+                if (has) {
+                    sheen.setTranslationX(-w * 0.7f);
+                    sheen.animate().translationX(w * 1.2f).setStartDelay(120).setDuration(750)
+                            .setInterpolator(new DecelerateInterpolator(1.5f)).start();
+                }
                 if (extra != null) extra.onFocus(v, has);
             }
         });
@@ -168,15 +182,6 @@ final class Ui {
     }
 
     static void toast(Activity a, String s) { Toast.makeText(a, s, Toast.LENGTH_SHORT).show(); }
-
-    /** Фон экрана: почти чёрный с лёгким градиентом. */
-    static GradientDrawable screenBg() {
-        return new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{BG_TOP, BG_BOTTOM});
-    }
-
-    static int darken(int c, float f) {
-        return Color.rgb((int) (Color.red(c) * f), (int) (Color.green(c) * f), (int) (Color.blue(c) * f));
-    }
 
     static LinearLayout.LayoutParams lp(int w, int h, int right) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, h);

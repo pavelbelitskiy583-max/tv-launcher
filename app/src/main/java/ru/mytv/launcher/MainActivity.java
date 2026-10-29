@@ -1,13 +1,13 @@
 package ru.mytv.launcher;
 
-import android.animation.ArgbEvaluator;
-import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Bitmap;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -17,10 +17,13 @@ import android.provider.Settings;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
-import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.FrameLayout;
+import android.widget.GridLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.text.SimpleDateFormat;
@@ -32,25 +35,33 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Главный экран в стиле Apple TV. */
+/** Главный экран в стиле Apple TV: размытый фон, верхний ряд, сетка ниже. */
 public class MainActivity extends Activity {
 
-    private static final int APPLE_GREEN = 0xFF30D158;
-    private static final String TAG_VPN = "vpn", TAG_ALL = "all", TAG_SETTINGS = "settings";
+    private static final int COLS = 5;
+    private static final String TAG_VPN = "vpn", TAG_SETTINGS = "settings";
+
+    // цвета системных иконок Apple
+    private static final int BLUE_1 = 0xFF3D9BFF, BLUE_2 = 0xFF0040DD;
+    private static final int GREEN_1 = 0xFF4CDB72, GREEN_2 = 0xFF1F8A3D;
+    private static final int GRAY_1 = 0xFF9A9AA0, GRAY_2 = 0xFF48484A;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private Prefs prefs;
 
-    private View glow;
-    private int glowColor = Ui.GRAPHITE;
-    private ValueAnimator glowAnim;
-    private TextView clock, vpnPill, heroTitle, heroSub;
-    private LinearLayout row;
-    private HorizontalScrollView rowScroll;
-    private View vpnCard;
+    private ImageView bgA, bgB;
+    private boolean bgFront = true;
+    private Object bgTag;
+    private ScrollView scroll;
+    private LinearLayout dock;
+    private GridLayout grid;
+    private TextView clock;
+    private View vpnDot, vpnCard;
     private Object focusedTag = TAG_VPN;
-    private int tileW, tileH;
+    private boolean showHidden = false;
+    private boolean lastVpn = false;
+    private int sw, sh, side, gap, tileW, tileH;
 
     // ------------------------------------------------------------------
     @Override
@@ -70,7 +81,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (AppRepo.cache == null) reload(); else rebuildRow();
+        if (AppRepo.cache == null) reload(); else rebuild();
         ui.post(clockTick);
         ui.post(statusLoop);
     }
@@ -91,10 +102,8 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (row.getChildCount() > 0) {
-            rowScroll.smoothScrollTo(0, 0);
-            Ui.card((LinearLayout) row.getChildAt(0)).requestFocus();
-        }
+        scroll.smoothScrollTo(0, 0);
+        if (vpnCard != null) vpnCard.requestFocus();
     }
 
     @Override
@@ -112,169 +121,216 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------
     private View buildLayout() {
-        FrameLayout root = new FrameLayout(this);
-        root.setBackground(Ui.screenBg());
-        root.setClipChildren(false);
-
-        int sw = getResources().getDisplayMetrics().widthPixels;
-        int sh = getResources().getDisplayMetrics().heightPixels;
-        int side = Ui.dp(this, 64), gap = Ui.dp(this, 34);
-        tileW = (sw - side * 2 - gap * 5) / 6;
+        sw = getResources().getDisplayMetrics().widthPixels;
+        sh = getResources().getDisplayMetrics().heightPixels;
+        side = (int) (sw * 0.065f);
+        gap = (int) (sw * 0.028f);
+        tileW = (sw - side * 2 - gap * (COLS - 1)) / COLS;
         tileH = tileW * 3 / 5;
 
-        // цветное свечение выбранного приложения
-        glow = new View(this);
-        root.addView(glow, new FrameLayout.LayoutParams(-1, (int) (sh * 0.8f)));
-        setGlow(Ui.GRAPHITE, false);
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(0xFF000000);
 
-        // часы и индикатор VPN — справа сверху
+        // размытый фон (две картинки — для плавной смены)
+        bgA = ambientView();
+        bgB = ambientView();
+        bgB.setAlpha(0f);
+        root.addView(bgA, new FrameLayout.LayoutParams(-1, -1));
+        root.addView(bgB, new FrameLayout.LayoutParams(-1, -1));
+
+        View scrim = new View(this);
+        scrim.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0x33000000, 0x80000000, 0xE6000000}));
+        root.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
+
+        // контент
+        scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        scroll.setClipChildren(false);
+        scroll.setSmoothScrollingEnabled(true);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setClipChildren(false);
+        col.setClipToPadding(false);
+        col.setPadding(0, (int) (sh * 0.40f), 0, (int) (sh * 0.12f));
+
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        hs.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        hs.setClipChildren(false);
+        hs.setClipToPadding(false);
+        hs.setPadding(side, (int) (tileH * 0.12f), side, 0);
+        dock = new LinearLayout(this);
+        dock.setClipChildren(false);
+        dock.setClipToPadding(false);
+        hs.addView(dock);
+        col.addView(hs, new LinearLayout.LayoutParams(-1, -2));
+
+        grid = new GridLayout(this);
+        grid.setColumnCount(COLS);
+        grid.setClipChildren(false);
+        grid.setClipToPadding(false);
+        grid.setPadding(side, (int) (tileH * 0.2f), side, 0);
+        col.addView(grid, new LinearLayout.LayoutParams(-1, -2));
+
+        scroll.addView(col, new ScrollView.LayoutParams(-1, -2));
+        root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+
+        // часы справа сверху + точка VPN
         LinearLayout status = new LinearLayout(this);
         status.setGravity(Gravity.CENTER_VERTICAL);
-        vpnPill = Ui.text(this, 15, 0xFF000000, 700);
-        vpnPill.setText("VPN");
-        vpnPill.setPadding(Ui.dp(this, 10), Ui.dp(this, 4), Ui.dp(this, 10), Ui.dp(this, 4));
-        vpnPill.setBackground(Ui.rounded(APPLE_GREEN, Ui.dp(this, 8)));
-        vpnPill.setVisibility(View.GONE);
-        status.addView(vpnPill, Ui.lp(-2, -2, Ui.dp(this, 16)));
-        clock = Ui.text(this, 24, Ui.TEXT, 500);
+        vpnDot = new View(this);
+        GradientDrawable dot = new GradientDrawable();
+        dot.setShape(GradientDrawable.OVAL);
+        dot.setColor(GREEN_1);
+        vpnDot.setBackground(dot);
+        vpnDot.setVisibility(View.GONE);
+        int ds = (int) (sh * 0.012f);
+        status.addView(vpnDot, Ui.lp(ds, ds, (int) (sh * 0.012f)));
+        clock = Ui.text(this, sh * 0.03f, 0xCCF5F5F7, true);
+        clock.setShadowLayer(10, 0, 2, 0x80000000);
         status.addView(clock);
         FrameLayout.LayoutParams sl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
-        sl.topMargin = Ui.dp(this, 40);
+        sl.topMargin = (int) (sh * 0.05f);
         sl.rightMargin = side;
         root.addView(status, sl);
-
-        // крупное название выбранного
-        LinearLayout hero = new LinearLayout(this);
-        hero.setOrientation(LinearLayout.VERTICAL);
-        heroTitle = Ui.text(this, 54, Ui.TEXT, 700);
-        heroSub = Ui.text(this, 21, Ui.TEXT_2, 400);
-        hero.addView(heroTitle);
-        LinearLayout.LayoutParams hs = new LinearLayout.LayoutParams(-2, -2);
-        hs.topMargin = Ui.dp(this, 12);
-        hero.addView(heroSub, hs);
-        FrameLayout.LayoutParams hl = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
-        hl.leftMargin = side;
-        hl.bottomMargin = Ui.dp(this, 64) + tileH + Ui.dp(this, 90);
-        root.addView(hero, hl);
-
-        // ряд плиток
-        rowScroll = new HorizontalScrollView(this);
-        rowScroll.setHorizontalScrollBarEnabled(false);
-        rowScroll.setClipChildren(false);
-        rowScroll.setClipToPadding(false);
-        rowScroll.setPadding(side, Ui.dp(this, 30), side, 0);
-        row = new LinearLayout(this);
-        row.setClipChildren(false);
-        row.setClipToPadding(false);
-        rowScroll.addView(row);
-        FrameLayout.LayoutParams rl = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-        rl.bottomMargin = Ui.dp(this, 40);
-        root.addView(rowScroll, rl);
         return root;
+    }
+
+    private ImageView ambientView() {
+        ImageView v = new ImageView(this);
+        v.setScaleType(ImageView.ScaleType.FIT_XY);
+        return v;
     }
 
     // ------------------------------------------------------------------
     private void reload() {
         io.execute(() -> {
             final Map<String, AppInfo> m = AppRepo.query(MainActivity.this);
-            ui.post(() -> { AppRepo.cache = m; rebuildRow(); });
+            ui.post(() -> { AppRepo.cache = m; rebuild(); });
         });
     }
 
-    private void rebuildRow() {
+    private void rebuild() {
         Map<String, AppInfo> apps = AppRepo.cache;
         if (apps == null) return;
         Object keep = focusedTag;
-        row.removeAllViews();
-        int gap = Ui.dp(this, 34);
-        AppInfo vpn = AppRepo.findVpn(apps, prefs.vpnPackage());
+        dock.removeAllViews();
+        grid.removeAllViews();
 
-        // VPN
-        LinearLayout v = Ui.tile(this, TAG_VPN, null, glyph(R.drawable.ic_shield), Ui.GRAPHITE, true,
-                "VPN", tileW, tileH, this::onTileFocus);
+        AppInfo vpn = AppRepo.findVpn(apps, prefs.vpnPackage());
+        String vpnPkg = vpn == null ? null : vpn.pkg;
+
+        // верхний ряд: VPN + главные приложения
+        boolean on = Ui.isVpnActive(this);
+        lastVpn = on;
+        LinearLayout v = Ui.tile(this, TAG_VPN, null, glyph(R.drawable.ic_shield),
+                on ? GREEN_1 : BLUE_1, on ? GREEN_2 : BLUE_2, 0.42f, "VPN", tileW, tileH, this::onTileFocus);
         vpnCard = Ui.card(v);
         vpnCard.setOnClickListener(x -> openVpn());
         vpnCard.setOnLongClickListener(x -> { showMenuFor(TAG_VPN); return true; });
-        row.addView(v, Ui.lp(-2, -2, gap));
-        paintVpn();
+        dock.addView(v, Ui.lp(-2, -2, gap));
 
-        // приложения
-        for (final AppInfo a : AppRepo.homeApps(apps, prefs, vpn == null ? null : vpn.pkg)) {
-            LinearLayout t = Ui.tile(this, a, a.banner, a.icon, a.color, false, a.label, tileW, tileH,
-                    this::onTileFocus);
-            Ui.card(t).setOnClickListener(x -> Ui.launch(this, a));
-            Ui.card(t).setOnLongClickListener(x -> { showMenuFor(a); return true; });
-            row.addView(t, Ui.lp(-2, -2, gap));
+        List<AppInfo> top = AppRepo.homeApps(apps, prefs, vpnPkg);
+        for (AppInfo a : top) dock.addView(appTile(a), Ui.lp(-2, -2, gap));
+
+        // сетка остальных + Настройки в конце
+        for (AppInfo a : AppRepo.otherApps(apps, prefs, top, vpnPkg, showHidden)) {
+            LinearLayout t = appTile(a);
+            if (AppRepo.isHidden(a, prefs)) Ui.card(t).setAlpha(0.35f);
+            addToGrid(t);
         }
-
-        // все приложения и настройки
-        LinearLayout all = Ui.tile(this, TAG_ALL, null, glyph(R.drawable.ic_grid), Ui.GRAPHITE, true,
-                "Приложения", tileW, tileH, this::onTileFocus);
-        Ui.card(all).setOnClickListener(x -> startActivity(new Intent(this, AppsActivity.class)));
-        row.addView(all, Ui.lp(-2, -2, gap));
-
-        LinearLayout st = Ui.tile(this, TAG_SETTINGS, null, glyph(R.drawable.ic_gear), Ui.GRAPHITE, true,
-                "Настройки", tileW, tileH, this::onTileFocus);
+        LinearLayout st = Ui.tile(this, TAG_SETTINGS, null, glyph(R.drawable.ic_gear),
+                GRAY_1, GRAY_2, 0.5f, "Настройки", tileW, tileH, this::onTileFocus);
         Ui.card(st).setOnClickListener(x -> {
             try { startActivity(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
             catch (Exception e) { Ui.toast(this, "Настройки недоступны"); }
         });
-        row.addView(st, Ui.lp(-2, -2, 0));
+        Ui.card(st).setOnLongClickListener(x -> { showMenuFor(TAG_SETTINGS); return true; });
+        addToGrid(st);
 
-        // вернуть фокус туда, где был
-        View target = null;
-        for (int i = 0; i < row.getChildCount(); i++) {
-            View c = Ui.card((LinearLayout) row.getChildAt(i));
-            Object t = c.getTag();
-            if (t == keep || (t instanceof AppInfo && keep instanceof AppInfo
-                    && ((AppInfo) t).pkg.equals(((AppInfo) keep).pkg))) target = c;
-        }
+        // вернуть фокус
+        View target = findCard(keep);
         (target != null ? target : vpnCard).requestFocus();
     }
 
-    private Drawable glyph(int res) {
-        Drawable d = getResources().getDrawable(res, getTheme());
-        return d.mutate();
+    private LinearLayout appTile(final AppInfo a) {
+        LinearLayout t = Ui.tile(this, a, a.banner, a.icon, Ui.shade(a.color, 1.12f), Ui.shade(a.color, 0.78f),
+                0.6f, a.label, tileW, tileH, this::onTileFocus);
+        Ui.card(t).setOnClickListener(x -> Ui.launch(this, a));
+        Ui.card(t).setOnLongClickListener(x -> { showMenuFor(a); return true; });
+        return t;
     }
 
+    private void addToGrid(LinearLayout t) {
+        GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
+        int col = grid.getChildCount() % COLS;
+        lp.setMargins(0, 0, col == COLS - 1 ? 0 : gap, (int) (tileH * 0.32f));
+        grid.addView(t, lp);
+    }
+
+    private View findCard(Object tag) {
+        for (LinearLayout g : new LinearLayout[]{dock}) {
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View c = Ui.card((LinearLayout) g.getChildAt(i));
+                if (same(c.getTag(), tag)) return c;
+            }
+        }
+        for (int i = 0; i < grid.getChildCount(); i++) {
+            View c = Ui.card((LinearLayout) grid.getChildAt(i));
+            if (same(c.getTag(), tag)) return c;
+        }
+        return null;
+    }
+
+    private static boolean same(Object x, Object y) {
+        if (x == y) return true;
+        if (x instanceof AppInfo && y instanceof AppInfo) return ((AppInfo) x).pkg.equals(((AppInfo) y).pkg);
+        return x != null && x.equals(y);
+    }
+
+    private Drawable glyph(int res) {
+        return getResources().getDrawable(res, getTheme()).mutate();
+    }
+
+    // ------------------------------------------------------------------
+    // Фокус → размытый фон
     // ------------------------------------------------------------------
     private void onTileFocus(View v, boolean has) {
         if (!has) return;
         focusedTag = v.getTag();
-        Object t = v.getTag();
-        if (t instanceof AppInfo) {
-            AppInfo a = (AppInfo) t;
-            heroTitle.setText(a.label);
-            heroSub.setText("");
-            setGlow(a.color, true);
-        } else if (TAG_VPN.equals(t)) {
-            updateVpnHero();
-        } else if (TAG_ALL.equals(t)) {
-            heroTitle.setText("Приложения");
-            heroSub.setText("Все установленные приложения");
-            setGlow(0xFF0A84FF, true);
-        } else if (TAG_SETTINGS.equals(t)) {
-            heroTitle.setText("Настройки");
-            heroSub.setText("Сеть, изображение, звук, источники");
-            setGlow(0xFF8E8E93, true);
+        if (isInDock(v)) scroll.smoothScrollTo(0, 0);
+        setAmbient(focusedTag, false);
+    }
+
+    private boolean isInDock(View v) {
+        ViewParent p = v.getParent();
+        while (p != null) {
+            if (p == dock) return true;
+            p = p.getParent();
         }
+        return false;
     }
 
-    private void setGlow(int color, boolean animate) {
-        if (glowAnim != null) glowAnim.cancel();
-        if (!animate) { applyGlow(color); glowColor = color; return; }
-        glowAnim = ValueAnimator.ofObject(new ArgbEvaluator(), glowColor, color);
-        glowAnim.setDuration(450);
-        glowAnim.addUpdateListener(an -> { glowColor = (Integer) an.getAnimatedValue(); applyGlow(glowColor); });
-        glowAnim.start();
-    }
+    private void setAmbient(Object tag, boolean force) {
+        if (!force && same(tag, bgTag)) return;
+        bgTag = tag;
+        Bitmap bmp;
+        if (tag instanceof AppInfo && ((AppInfo) tag).ambient != null) bmp = ((AppInfo) tag).ambient;
+        else if (TAG_VPN.equals(tag)) bmp = lastVpn ? AppRepo.ambientColors(GREEN_1, GREEN_2)
+                : AppRepo.ambientColors(BLUE_1, BLUE_2);
+        else bmp = AppRepo.ambientColors(GRAY_1, GRAY_2);
 
-    private void applyGlow(int c) {
-        int base = Ui.darken(c, 0.55f);
-        int top = (0x8C << 24) | (base & 0xFFFFFF);
-        int mid = (0x30 << 24) | (base & 0xFFFFFF);
-        glow.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{top, mid, 0x00000000}));
+        BitmapDrawable d = new BitmapDrawable(getResources(), bmp);
+        d.setFilterBitmap(true);
+        final ImageView in = bgFront ? bgB : bgA;
+        final ImageView out = bgFront ? bgA : bgB;
+        bgFront = !bgFront;
+        in.setImageDrawable(d);
+        in.animate().alpha(1f).setDuration(600).start();
+        out.animate().alpha(0f).setDuration(600).start();
     }
 
     // ------------------------------------------------------------------
@@ -285,7 +341,7 @@ public class MainActivity extends Activity {
         if (vpn != null) { Ui.launch(this, vpn); return; }
         new AlertDialog.Builder(this, R.style.Dialog)
                 .setTitle("Happ не установлен")
-                .setMessage("Установите Happ для Android TV. Если он уже стоит под другим названием — выберите его.")
+                .setMessage("Установите Happ для Android TV или выберите другое приложение для этой кнопки.")
                 .setPositiveButton("Выбрать", (d, w) -> chooseVpnApp())
                 .setNegativeButton("Закрыть", null)
                 .show();
@@ -293,31 +349,23 @@ public class MainActivity extends Activity {
 
     private void chooseVpnApp() {
         if (AppRepo.cache == null) return;
-        final List<AppInfo> list = new ArrayList<>(AppRepo.cache.values());
         List<String> names = new ArrayList<>();
         List<Runnable> acts = new ArrayList<>();
-        for (final AppInfo a : list) {
+        for (final AppInfo a : AppRepo.cache.values()) {
             names.add(a.label);
-            acts.add(() -> { prefs.setVpnPackage(a.pkg); rebuildRow(); });
+            acts.add(() -> { prefs.setVpnPackage(a.pkg); rebuild(); });
         }
-        Ui.menu(this, "Приложение для кнопки VPN", names, acts);
+        Ui.menu(this, "Приложение для VPN", names, acts);
     }
 
-    private void paintVpn() {
-        if (vpnCard == null) return;
+    private void checkVpn() {
         boolean on = Ui.isVpnActive(this);
-        vpnCard.setBackground(Ui.rounded(on ? APPLE_GREEN : Ui.GRAPHITE, Ui.dp(this, 14)));
-        vpnPill.setVisibility(on ? View.VISIBLE : View.GONE);
-        if (TAG_VPN.equals(focusedTag) && vpnCard.hasFocus()) updateVpnHero();
-    }
-
-    private void updateVpnHero() {
-        boolean on = Ui.isVpnActive(this);
-        AppInfo vpn = AppRepo.cache == null ? null : AppRepo.findVpn(AppRepo.cache, prefs.vpnPackage());
-        heroTitle.setText("VPN");
-        if (vpn == null) heroSub.setText("Happ не установлен");
-        else heroSub.setText(on ? "Подключено · " + vpn.label : "Не подключено · откройте, чтобы включить");
-        setGlow(on ? APPLE_GREEN : 0xFF636366, true);
+        vpnDot.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (on != lastVpn && vpnCard != null) {
+            lastVpn = on;
+            vpnCard.setBackground(Ui.vertical(on ? GREEN_1 : BLUE_1, on ? GREEN_2 : BLUE_2, tileH * 0.09f));
+            if (TAG_VPN.equals(focusedTag)) setAmbient(TAG_VPN, true);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -332,19 +380,33 @@ public class MainActivity extends Activity {
             Ui.menu(this, "VPN", items, acts);
             return;
         }
+        if (TAG_SETTINGS.equals(tag)) {
+            items.add(showHidden ? "Не показывать скрытые" : "Показать скрытые приложения");
+            acts.add(() -> { showHidden = !showHidden; rebuild(); });
+            Ui.menu(this, "Настройки", items, acts);
+            return;
+        }
         if (!(tag instanceof AppInfo)) return;
         final AppInfo a = (AppInfo) tag;
+        final boolean onTop = AppRepo.onHome(a, prefs);
+        final boolean hidden = prefs.hidden().contains(a.pkg);
+
         items.add("Открыть");
         acts.add(() -> Ui.launch(this, a));
-        final List<String> pin = prefs.pinned();
-        if (pin.contains(a.pkg)) {
-            items.add("Переместить влево");
-            acts.add(() -> { move(a.pkg, -1); });
-            items.add("Переместить вправо");
-            acts.add(() -> { move(a.pkg, 1); });
+        if (prefs.pinned().contains(a.pkg)) {
+            items.add("Сдвинуть влево");
+            acts.add(() -> move(a.pkg, -1));
+            items.add("Сдвинуть вправо");
+            acts.add(() -> move(a.pkg, 1));
         }
-        items.add("Убрать с главного экрана");
-        acts.add(() -> { AppRepo.setOnHome(a, prefs, false); focusedTag = TAG_VPN; rebuildRow(); });
+        items.add(onTop ? "Убрать из верхнего ряда" : "В верхний ряд");
+        acts.add(() -> { AppRepo.setOnHome(a, prefs, !onTop); rebuild(); });
+        items.add(hidden ? "Показать" : "Скрыть");
+        acts.add(() -> {
+            prefs.setFlag("hidden", a.pkg, !hidden);
+            if (!hidden) { AppRepo.setOnHome(a, prefs, false); focusedTag = TAG_VPN; }
+            rebuild();
+        });
         items.add("О приложении");
         acts.add(() -> Ui.openAppDetails(this, a.pkg));
         Ui.menu(this, a.label, items, acts);
@@ -357,20 +419,20 @@ public class MainActivity extends Activity {
         p.remove(i);
         p.add(j, pkg);
         prefs.setPinned(p);
-        rebuildRow();
+        rebuild();
     }
 
     // ------------------------------------------------------------------
     private final Runnable clockTick = new Runnable() {
         @Override public void run() {
-            clock.setText(new SimpleDateFormat("HH:mm", new Locale("ru")).format(new Date()));
+            clock.setText(new SimpleDateFormat("H:mm", new Locale("ru")).format(new Date()));
             ui.postDelayed(this, 1000 * (60 - (System.currentTimeMillis() / 1000) % 60));
         }
     };
 
     private final Runnable statusLoop = new Runnable() {
         @Override public void run() {
-            paintVpn();
+            checkVpn();
             ui.postDelayed(this, 3000);
         }
     };

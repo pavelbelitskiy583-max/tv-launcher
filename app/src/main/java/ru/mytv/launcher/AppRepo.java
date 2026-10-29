@@ -61,6 +61,7 @@ final class AppRepo {
                 }
                 try { a.icon = ri.loadIcon(pm); } catch (Exception ignored) { }
                 a.color = dominantColor(a.banner != null ? a.banner : a.icon);
+                a.ambient = ambient(a.banner, a.icon, a.color);
                 out.put(a.pkg, a);
             }
         }
@@ -144,6 +145,53 @@ final class AppRepo {
         }
         return best;
     }
+
+    /**
+     * Крошечная (24×14) копия картинки приложения. Растянутая на весь экран
+     * с билинейной фильтрацией, она даёт мягкое «размытое стекло» как в tvOS.
+     */
+    static Bitmap ambient(Drawable banner, Drawable icon, int color) {
+        try {
+            int w = 96, h = 54;
+            Bitmap big = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(big);
+            c.drawColor(color);
+            if (banner != null) {
+                banner.setBounds(0, 0, w, h);
+                banner.draw(c);
+            } else if (icon != null) {
+                int s = h;
+                icon.setBounds((w - s) / 2, 0, (w + s) / 2, s);
+                icon.draw(c);
+            }
+            Bitmap small = Bitmap.createScaledBitmap(big, 24, 14, true);
+            big.recycle();
+            return small;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    static Bitmap ambientColors(int top, int bottom) {
+        Bitmap b = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888);
+        b.setPixel(0, 0, top); b.setPixel(1, 0, top);
+        b.setPixel(0, 1, bottom); b.setPixel(1, 1, bottom);
+        return b;
+    }
+
+    /** Остальные приложения (нижняя сетка). */
+    static List<AppInfo> otherApps(Map<String, AppInfo> apps, Prefs p, List<AppInfo> top, String vpnPkg,
+                                   boolean showHidden) {
+        List<AppInfo> out = new ArrayList<>();
+        for (AppInfo a : apps.values()) {
+            if (top.contains(a) || a.pkg.equals(vpnPkg)) continue;
+            if (!showHidden && (p.hidden().contains(a.pkg) || isJunk(a))) continue;
+            out.add(a);
+        }
+        return out;
+    }
+
+    static boolean isHidden(AppInfo a, Prefs p) { return p.hidden().contains(a.pkg) || isJunk(a); }
 
     /** Фирменный цвет иконки: самый «многочисленный» насыщенный оттенок. */
     static int dominantColor(Drawable d) {

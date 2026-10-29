@@ -2,6 +2,7 @@ package ru.mytv.launcher;
 
 import android.content.ComponentName;
 import android.content.Intent;
+import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
 
 /** Одно установленное приложение. */
@@ -10,9 +11,10 @@ final class AppInfo {
     final String pkg;
     final ComponentName component;
     final boolean isTvApp;
-    Drawable banner;   // широкая ТВ-картинка, если есть
+    Drawable banner;          // широкая ТВ-картинка, если есть
     Drawable icon;
-    int color = 0xFF2C2C2E; // фирменный цвет, вычисленный из иконки
+    int color = 0xFF3A3A3C;   // фирменный цвет из иконки
+    Bitmap ambient;           // крошечная копия для размытого фона
 
     AppInfo(String label, String pkg, ComponentName component, boolean isTvApp) {
         this.label = label;
